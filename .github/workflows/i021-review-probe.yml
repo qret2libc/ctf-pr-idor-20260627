@@ -159,7 +159,8 @@ jobs:
             echo "I021REQ create_approve payload=$PAYLOAD"
             CODE=$(curl -sS -o /tmp/appr.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/reviews" --data "$PAYLOAD")
             echo "I021RES create_approve code=$CODE"
-            jq -c '{id,state,body,submitted_at,user:.user.login}' /tmp/appr.json 2>/dev/null || head -c 900 /tmp/appr.json
+            jq -c '{id,state,body,message,submitted_at,user:.user.login}' /tmp/appr.json 2>/dev/null || head -c 900 /tmp/appr.json
+            if [ "$CODE" != "200" ]; then cat /tmp/appr.json; echo; fi
             ;;
           dismiss_target)
             if [ -n "$RID_IN" ]; then
@@ -168,6 +169,7 @@ jobs:
               CODE=$(curl -sS -o /tmp/dist.json -w '%{http_code}' "${H[@]}" -X PUT "$API/pulls/$PR/reviews/$RID_IN/dismissals" --data "$PAYLOAD")
               echo "I021RES dismiss_target id=$RID_IN code=$CODE"
               head -c 1200 /tmp/dist.json
+              echo
             fi
             ;;
           delete_review_probe)
