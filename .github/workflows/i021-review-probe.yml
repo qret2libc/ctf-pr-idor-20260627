@@ -17,6 +17,7 @@ on:
         - delete_comments_api
         - delete_review_probe
         - create_approve_api
+        - create_request_changes_api
         - dismiss_target
       pr:
         description: pull request number
@@ -161,6 +162,15 @@ jobs:
             echo "I021RES create_approve code=$CODE"
             jq -c '{id,state,body,message,submitted_at,user:.user.login}' /tmp/appr.json 2>/dev/null || head -c 900 /tmp/appr.json
             if [ "$CODE" != "200" ]; then cat /tmp/appr.json; echo; fi
+            ;;
+          create_request_changes_api)
+            BODY="i021 api-created CHANGES_REQUESTED review body marker: i021-api-rc-body-$TS"
+            PAYLOAD=$(jq -n --arg b "$BODY" '{event:"REQUEST_CHANGES",body:$b}')
+            echo "I021REQ create_rc payload=$PAYLOAD"
+            CODE=$(curl -sS -o /tmp/rc.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/reviews" --data "$PAYLOAD")
+            echo "I021RES create_rc code=$CODE"
+            jq -c '{id,state,body,message,submitted_at,user:.user.login}' /tmp/rc.json 2>/dev/null || head -c 900 /tmp/rc.json
+            if [ "$CODE" != "200" ]; then cat /tmp/rc.json; echo; fi
             ;;
           dismiss_target)
             if [ -n "$RID_IN" ]; then
