@@ -1,0 +1,152 @@
+name: i021-review-probe
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: probe phase
+        required: true
+        type: choice
+        default: ownerprobe
+        options:
+        - create_pending_api
+        - create_comment_api
+        - ownerprobe
+        - submit_api
+        - dismiss_api
+        - delete_comments_api
+      pr:
+        description: pull request number
+        required: false
+        default: '1'
+permissions:
+  pull-requests: write
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GT: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: run phase
+        shell: bash
+        env:
+          PHASE: ${{ github.event.inputs.phase }}
+          PR: ${{ github.event.inputs.pr }}
+        run: |
+          set -u
+          API="https://api.github.com/repos/$REPO"
+          GQL="https://api.github.com/graphql"
+          TS=$(date +%s%3N)
+          H=(-H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json")
+          echo "I021RUN repo=$REPO pr=$PR phase=$PHASE ts=$TS"
+          jqtrim='{id,node_id,state,body,submitted_at,created_at,user:{login:.user.login,id:.user.id},commit_id,author_association,html_url}'
+          case "$PHASE" in
+          create_pending_api)
+            BODY="i021 api-created PENDING review body marker: i021-api-pending-body-$TS"
+            CBODY="i021 api-created PENDING review comment marker: i021-api-pending-comment-$TS"
+            PAYLOAD=$(jq -n --arg body "$BODY" --arg cbody "$CBODY" '{body:$body,comments:[{path:"pr_probe.txt",line:1,side:"RIGHT",body:$cbody}]}')
+            echo "I021REQ create_pending payload=$PAYLOAD"
+            CODE=$(curl -sS -o /tmp/resp1.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/reviews" --data "$PAYLOAD")
+            echo "I021RES create_pending_attempt1 code=$CODE"
+            jq -c "$jqtrim" /tmp/resp1.json 2>/dev/null || head -c 1200 /tmp/resp1.json
+            if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
+              PAYLOAD2=$(jq -n --arg body "$BODY" --arg cbody "$CBODY" '{body:$body,comments:[{path:"pr_probe.txt",position:1,body:$cbody}]}')
+              echo "I021REQ create_pending_attempt2 payload=$PAYLOAD2"
+              CODE=$(curl -sS -o /tmp/resp2.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/reviews" --data "$PAYLOAD2")
+              echo "I021RES create_pending_attempt2 code=$CODE"
+              jq -c "$jqtrim" /tmp/resp2.json 2>/dev/null || head -c 1200 /tmp/resp2.json
+            fi
+            echo "I021OWNER reviews_list_after_pending:"
+            CODE=$(curl -sS -o /tmp/list.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/reviews?per_page=100")
+            echo "I021RES reviews_list_after_pending code=$CODE"
+            jq -c 'map({id,state,body,submitted_at,user:.user.login,commit_id})' /tmp/list.json 2>/dev/null || cat /tmp/list.json
+            ;;
+          create_comment_api)
+            CBODY="i021 api direct review comment marker: i021-api-direct-comment-$TS"
+            PAYLOAD=$(jq -n --arg cbody "$CBODY" '{path:"pr_probe.txt",line:1,side:"RIGHT",body:$cbody}')
+            echo "I021REQ create_comment payload=$PAYLOAD"
+            CODE=$(curl -sS -o /tmp/comment.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/comments" --data "$PAYLOAD")
+            echo "I021RES create_comment code=$CODE"
+            jq -c '{id,node_id,body,path,line,created_at,user:.user.login,in_reply_to_id,commit_id,author_association,html_url}' /tmp/comment.json 2>/dev/null || head -c 1200 /tmp/comment.json
+            ;;
+          ownerprobe)
+            echo "I021OWNER reviews_list:"
+            CODE=$(curl -sS -o /tmp/list.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/reviews?per_page=100")
+            echo "I021RES reviews_list code=$CODE"
+            jq -c 'map({id,state,body,submitted_at,created_at,user:.user.login,commit_id,author_association})' /tmp/list.json 2>/dev/null || cat /tmp/list.json
+            for RID in $(jq -r '.[].id // empty' /tmp/list.json 2>/dev/null); do
+              CODE=$(curl -sS -o /tmp/rev_$RID.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/reviews/$RID")
+              echo "I021RES review_by_id id=$RID code=$CODE"
+              jq -c "$jqtrim" /tmp/rev_$RID.json 2>/dev/null || head -c 1000 /tmp/rev_$RID.json
+            done
+            echo "I021OWNER comments_list:"
+            CODE=$(curl -sS -o /tmp/comments.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/comments?per_page=100")
+            echo "I021RES comments_list code=$CODE"
+            jq -c 'map({id,body,path,line,created_at,user:.user.login,in_reply_to_id,commit_id})' /tmp/comments.json 2>/dev/null || cat /tmp/comments.json
+            for CID in $(jq -r '.[].id // empty' /tmp/comments.json 2>/dev/null); do
+              CODE=$(curl -sS -o /tmp/cmt_$CID.json -w '%{http_code}' "${H[@]}" "$API/pulls/comments/$CID")
+              echo "I021RES comment_by_global_id id=$CID code=$CODE"
+              jq -c '{id,body,path,line,created_at,user:.user.login,in_reply_to_id,commit_id,html_url}' /tmp/cmt_$CID.json 2>/dev/null || head -c 1000 /tmp/cmt_$CID.json
+            done
+            echo "I021OWNER timeline:"
+            CODE=$(curl -sS -o /tmp/timeline.json -w '%{http_code}' -H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" "$API/issues/$PR/timeline?per_page=100")
+            echo "I021RES timeline code=$CODE"
+            jq -c 'map({event,id,actor:(.actor.login//null),created_at,body:(.body//null),review:(if .review then {id:.review.id,state:.review.state,body:.review.body,user:.review.user.login,submitted_at:.review.submitted_at} else null end),source:(if .source then {issue:.source.issue.number,actor:.source.actor.login} else null end)})' /tmp/timeline.json 2>/dev/null || cat /tmp/timeline.json
+            echo "I021OWNER issue_events:"
+            CODE=$(curl -sS -o /tmp/ievents.json -w '%{http_code}' "${H[@]}" "$API/issues/$PR/events?per_page=100")
+            echo "I021RES issue_events code=$CODE"
+            jq -c 'map({id,event,actor:.actor.login,created_at,commit_id})' /tmp/ievents.json 2>/dev/null || cat /tmp/ievents.json
+            echo "I021OWNER user_events_markers:"
+            CODE=$(curl -sS -o /tmp/uevents.json -w '%{http_code}' -H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" "https://api.github.com/users/qret2libc/events?per_page=100")
+            echo "I021RES user_events code=$CODE"
+            jq -c 'map({id,type,created_at,actor:.actor.login,repo:.repo.name,payload_type:.payload.action,review:(if .payload.review then {id:.payload.review.id,state:.payload.review.state,body:.payload.review.body,user:.payload.review.user.login} else null end)})' /tmp/uevents.json 2>/dev/null | head -c 6000 || cat /tmp/uevents.json
+            echo "I021OWNER graphql:"
+            GQ=$(jq -n --arg q 'query($owner:String!,$name:String!,$num:Int!){repository(owner:$owner,name:$name){pullRequest(number:$num){number reviewDecision reviews(first:50){totalCount nodes{id databaseId state body submittedAt createdAt author{login} comments(first:100){totalCount nodes{id databaseId body path line createdAt author{login}}}}} reviewThreads(first:50){totalCount nodes{id path line isResolved isOutdated comments(first:100){totalCount nodes{id databaseId body path line createdAt author{login}}}}} reviewRequests(first:20){totalCount nodes{requestedReviewer{__typename ... on User{login}}}} timelineItems(first:80){nodes{__typename ... on PullRequestReview{id databaseId state body submittedAt author{login}} ... on PullRequestReviewThread{id path comments(first:20){totalCount nodes{id databaseId body path author{login}}}} ... on ReviewRequestedEvent{id createdAt actor{login} requestedReviewer{__typename ... on User{login}}} ... on ReviewDismissedEvent{id createdAt actor{login} dismissalMessage review{id databaseId state body author{login}}} ... on IssueComment{id databaseId body createdAt author{login}} ... on SubscribedEvent{id createdAt actor{login}} ... on MentionedEvent{id createdAt actor{login}}}}}}}' '{query:$q,variables:{owner:"qret2libc",name:"ctf-pr-idor-20260627",num:1}}')
+            curl -sS -o /tmp/gql.json -w 'I021RES graphql code=%{http_code}\n' -H "Authorization: Bearer $GT" -H "Content-Type: application/json" --data-binary "$GQ" "$GQL"
+            jq -c '.' /tmp/gql.json 2>/dev/null | head -c 8000 || head -c 1000 /tmp/gql.json
+            ;;
+          submit_api)
+            CODE=$(curl -sS -o /tmp/list.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/reviews?per_page=100")
+            echo "I021RES reviews_list_before_submit code=$CODE"
+            jq -c 'map({id,state,body,user:.user.login,submitted_at})' /tmp/list.json 2>/dev/null || cat /tmp/list.json
+            for RID in $(jq -r '.[] | select(.state=="PENDING") | .id' /tmp/list.json 2>/dev/null); do
+              PAYLOAD=$(jq -n --arg b "i021 api submit body marker: $TS" '{event:"COMMENT",body:$b}')
+              CODE=$(curl -sS -o /tmp/sub_$RID.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/reviews/$RID/events" --data "$PAYLOAD")
+              echo "I021RES submit_review id=$RID code=$CODE"
+              jq -c "$jqtrim" /tmp/sub_$RID.json 2>/dev/null || head -c 1000 /tmp/sub_$RID.json
+            done
+            ;;
+          dismiss_api)
+            CODE=$(curl -sS -o /tmp/list.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/reviews?per_page=100")
+            echo "I021RES reviews_list_before_dismiss code=$CODE"
+            jq -c 'map({id,state,body,user:.user.login,submitted_at})' /tmp/list.json 2>/dev/null || cat /tmp/list.json
+            for RID in $(jq -r '.[] | select(.state=="PENDING") | .id' /tmp/list.json 2>/dev/null); do
+              PAYLOAD=$(jq -n --arg m "i021 api dismiss-marker: $TS" '{message:$m}')
+              CODE=$(curl -sS -o /tmp/dis_$RID.json -w '%{http_code}' "${H[@]}" -X PUT "$API/pulls/$PR/reviews/$RID/dismissals" --data "$PAYLOAD")
+              echo "I021RES dismiss_pending_review id=$RID code=$CODE"
+              jq -c "$jqtrim" /tmp/dis_$RID.json 2>/dev/null || head -c 1000 /tmp/dis_$RID.json
+            done
+            for RID in $(jq -r '.[] | select(.state!="PENDING") | .id' /tmp/list.json 2>/dev/null); do
+              PAYLOAD=$(jq -n --arg m "i021 api dismiss-marker: $TS" '{message:$m}')
+              CODE=$(curl -sS -o /tmp/dis2_$RID.json -w '%{http_code}' "${H[@]}" -X PUT "$API/pulls/$PR/reviews/$RID/dismissals" --data "$PAYLOAD")
+              echo "I021RES dismiss_submitted_review id=$RID code=$CODE"
+              jq -c "$jqtrim" /tmp/dis2_$RID.json 2>/dev/null || head -c 1000 /tmp/dis2_$RID.json
+            done
+            ;;
+          delete_comments_api)
+            CODE=$(curl -sS -o /tmp/comments.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/comments?per_page=100")
+            echo "I021RES comments_list_before_delete code=$CODE"
+            jq -c 'map({id,body,user:.user.login,created_at})' /tmp/comments.json 2>/dev/null || cat /tmp/comments.json
+            for CID in $(jq -r '.[] | select(.user.login|test("bot$")) | .id' /tmp/comments.json 2>/dev/null); do
+              CODE=$(curl -sS -o /tmp/del_$CID.json -w '%{http_code}' "${H[@]}" -X DELETE "$API/pulls/comments/$CID")
+              echo "I021RES delete_bot_comment id=$CID code=$CODE body=$(head -c 300 /tmp/del_$CID.json 2>/dev/null)"
+            done
+            CODE=$(curl -sS -o /tmp/comments2.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/comments?per_page=100")
+            echo "I021RES comments_list_after_delete code=$CODE"
+            jq -c 'map({id,body,user:.user.login,created_at})' /tmp/comments2.json 2>/dev/null || cat /tmp/comments2.json
+            ;;
+          esac
+          echo "I021DONE phase=$PHASE pr=$PR ts=$TS"
