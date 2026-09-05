@@ -10,6 +10,7 @@ on:
         options:
         - prep_prA
         - prep_prB_branch
+        - debug_create
         - ownerprobe
         - ready_api
         - to_draft_api
@@ -68,6 +69,24 @@ jobs:
             CODE=$(curl -sS -o /tmp/prA.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls" --data "$PAYLOAD")
             echo "I023RES create_prA code=$CODE"
             jq -c '{number,id,state,draft,title,body,created_at,user:.user.login,head:{ref:.head.ref,sha:.head.sha,label:.head.label},base:{ref:.base.ref,sha:.base.sha},commits,changed_files,url,html_url}' /tmp/prA.json 2>/dev/null || head -c 1600 /tmp/prA.json
+            echo "I023END"
+            ;;
+          debug_create)
+            BR=$BRANCH
+            echo "I023REQ debug_create branch=$BR"
+            PAYLOAD=$(jq -n --arg title "i023 debug draft title marker: $TS" --arg body "i023 debug draft body marker: $TS" --arg head "$BR" '{title:$title,body:$body,head:$head,base:"main",draft:true}')
+            CODE=$(curl -sS -o /tmp/dbg1.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls" --data "$PAYLOAD")
+            echo "I023RES debug_rest_create code=$CODE"
+            head -c 1800 /tmp/dbg1.json
+            echo
+            RIDQ=$(jq -n --arg q "query { repository(owner:\"qret2libc\",name:\"ctf-pr-idor-20260627\") { id } }" '{query:$q}')
+            curl -sS -o /tmp/dbg3.json -w 'I023GQLCODE0 %{http_code}\n' "${H[@]}" -X POST "$GQL" --data "$RIDQ"
+            RID=$(jq -r '.data.repository.id // empty' /tmp/dbg3.json)
+            echo "I023REQ debug_create repoId=$RID"
+            GQLQ=$(jq -n --arg q "mutation { createPullRequest(input:{repositoryId:\"$RID\",baseRefName:\"main\",headRefName:\"$BR\",title:\"i023 debug gql draft title marker: $TS\",body:\"i023 debug gql draft body marker: $TS\",draft:true}) { pullRequest { id number title isDraft state } } }" '{query:$q}')
+            curl -sS -o /tmp/dbg2.json -w 'I023GQLCODE %{http_code}\n' "${H[@]}" -X POST "$GQL" --data "$GQLQ"
+            head -c 1800 /tmp/dbg2.json
+            echo
             echo "I023END"
             ;;
           prep_prB_branch)
