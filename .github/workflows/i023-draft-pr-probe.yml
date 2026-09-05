@@ -1,0 +1,152 @@
+name: i023-draft-pr-probe
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: probe phase
+        required: true
+        type: choice
+        default: prep_prA
+        options:
+        - prep_prA
+        - prep_prB_branch
+        - ownerprobe
+        - ready_api
+        - to_draft_api
+        - close_api
+        - delete_branch
+      pr:
+        description: pull request number
+        required: false
+        default: ''
+      branch:
+        description: branch name for delete_branch
+        required: false
+        default: ''
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GT: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: run phase
+        shell: bash
+        env:
+          PHASE: ${{ github.event.inputs.phase }}
+          PR: ${{ github.event.inputs.pr }}
+          BRANCH: ${{ github.event.inputs.branch }}
+        run: |
+          set -u
+          API="https://api.github.com/repos/$REPO"
+          GQL="https://api.github.com/graphql"
+          TS=$(date +%s%3N)
+          H=(-H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json")
+          case "$PHASE" in
+          prep_prA)
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            BR="i023/prA-head-$TS"
+            git checkout -b "$BR"
+            mkdir -p i023-probe/prA
+            FILE="i023-probe/prA/head-marker-$TS.txt"
+            printf 'i023 prA head marker %s\n' "$TS" > "$FILE"
+            git add "$FILE"
+            git commit -m "i023 prA head commit marker: $TS"
+            git push -u origin "$BR"
+            TITLE="i023 prA draft title marker: $TS"
+            BODY="i023 prA draft body marker: $TS"
+            PAYLOAD=$(jq -n --arg title "$TITLE" --arg body "$BODY" --arg head "$BR" '{title:$title,body:$body,head:$head,base:"main",draft:true}')
+            echo "I023TS ts=$TS"
+            echo "I023REQ prep_prA branch=$BR"
+            CODE=$(curl -sS -o /tmp/prA.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls" --data "$PAYLOAD")
+            echo "I023RES create_prA code=$CODE"
+            jq -c '{number,id,state,draft,title,body,created_at,user:.user.login,head:{ref:.head.ref,sha:.head.sha,label:.head.label},base:{ref:.base.ref,sha:.base.sha},commits,changed_files,url,html_url}' /tmp/prA.json 2>/dev/null || head -c 1600 /tmp/prA.json
+            echo "I023END"
+            ;;
+          prep_prB_branch)
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            BR="i023/prB-head-$TS"
+            git checkout -b "$BR"
+            mkdir -p i023-probe/prB
+            FILE="i023-probe/prB/head-marker-$TS.txt"
+            printf 'i023 prB head marker %s\n' "$TS" > "$FILE"
+            git add "$FILE"
+            git commit -m "i023 prB head commit marker: $TS"
+            git push -u origin "$BR"
+            echo "I023TS ts=$TS"
+            echo "I023REQ prep_prB_branch branch=$BR head_sha=$(git rev-parse HEAD)"
+            echo "I023END"
+            ;;
+          ownerprobe)
+            for N in ${PR//,/ }; do
+              echo "I023OWNER pr=$N"
+              for EP in "pulls/$N" "pulls?state=all&per_page=100" "pulls/$N/files?per_page=100" "pulls/$N/commits?per_page=100" "issues/$N/comments" "pulls/$N/comments" "pulls/$N/reviews" "issues/$N" "issues/$N/timeline?per_page=100" "git/refs/pull/$N/head" "git/refs/pull/$N/merge"; do
+                CODE=$(curl -sS -o /tmp/op.json -w '%{http_code}' "${H[@]}" "$API/$EP")
+                echo "I023RES ownerprobe $EP code=$CODE"
+                jq -c 'if type=="array" then {len:length, hit:(tostring|test("i023-";"i"))} else {draft:.draft,state:.state,title:.title,body:.body,hit:(tostring|test("i023-";"i")),ref:(.ref // null)} end' /tmp/op.json 2>/dev/null | head -c 1600
+                echo
+              done
+              echo "I023OWNER eventfeed:"
+              CODE=$(curl -sS -o /tmp/opev.json -w '%{http_code}' "${H[@]}" "$API/events?per_page=100")
+              echo "I023RES ownerprobe events code=$CODE"
+              jq -c '[.[] | select(.type=="PullRequestEvent") | {id,created_at,actor:.actor.login,action:(.payload.action // null),number:(.payload.pull_request.number // null),draft:(.payload.pull_request.draft // null),title:(.payload.pull_request.title // null),body_hit:((.payload.pull_request.body // "")|test("i023";"i"))}] | .[:12]' /tmp/opev.json 2>/dev/null | head -c 4000
+              echo
+            done
+            echo "I023END"
+            ;;
+          ready_api)
+            N=$PR
+            GQLQ=$(jq -n --arg q "query { repository(owner:\"qret2libc\",name:\"ctf-pr-idor-20260627\") { pullRequest(number: $N) { id isDraft } } }" '{query:$q}')
+            curl -sS -o /tmp/g1.json -w 'I023GQLCODE %{http_code}\n' "${H[@]}" -X POST "$GQL" --data "$GQLQ"
+            jq -c . /tmp/g1.json 2>/dev/null | head -c 1200
+            echo
+            PID=$(jq -r '.data.repository.pullRequest.id // empty' /tmp/g1.json)
+            echo "I023REQ ready_api pr=$N pullRequestId=$PID"
+            if [ -n "$PID" ]; then
+              MUT=$(jq -n --arg q "mutation { markPullRequestReadyForReview(input:{pullRequestId:\"$PID\"}) { pullRequest { id number isDraft state } } }" '{query:$q}')
+              curl -sS -o /tmp/m1.json -w 'I023GQLCODE2 %{http_code}\n' "${H[@]}" -X POST "$GQL" --data "$MUT"
+              jq -c . /tmp/m1.json 2>/dev/null | head -c 1600
+              echo
+            fi
+            echo "I023END"
+            ;;
+          to_draft_api)
+            N=$PR
+            GQLQ=$(jq -n --arg q "query { repository(owner:\"qret2libc\",name:\"ctf-pr-idor-20260627\") { pullRequest(number: $N) { id isDraft state } } }" '{query:$q}')
+            curl -sS -o /tmp/g2.json -w 'I023GQLCODE %{http_code}\n' "${H[@]}" -X POST "$GQL" --data "$GQLQ"
+            jq -c . /tmp/g2.json 2>/dev/null | head -c 1200
+            echo
+            PID=$(jq -r '.data.repository.pullRequest.id // empty' /tmp/g2.json)
+            echo "I023REQ to_draft_api pr=$N pullRequestId=$PID"
+            if [ -n "$PID" ]; then
+              MUT=$(jq -n --arg q "mutation { convertPullRequestToDraft(input:{pullRequestId:\"$PID\"}) { pullRequest { id number isDraft state } } }" '{query:$q}')
+              curl -sS -o /tmp/m2.json -w 'I023GQLCODE2 %{http_code}\n' "${H[@]}" -X POST "$GQL" --data "$MUT"
+              jq -c . /tmp/m2.json 2>/dev/null | head -c 1600
+              echo
+            fi
+            echo "I023END"
+            ;;
+          close_api)
+            N=$PR
+            PAYLOAD=$(jq -n '{state:"closed"}')
+            CODE=$(curl -sS -o /tmp/cl.json -w '%{http_code}' "${H[@]}" -X PATCH "$API/pulls/$N" --data "$PAYLOAD")
+            echo "I023RES close_api pr=$N code=$CODE"
+            jq -c '{number,state,merged,draft,closed_at,title,head:.head.ref}' /tmp/cl.json 2>/dev/null || head -c 1200 /tmp/cl.json
+            echo "I023END"
+            ;;
+          delete_branch)
+            BR=$BRANCH
+            CODE=$(curl -sS -o /tmp/db.json -w '%{http_code}' "${H[@]}" -X DELETE "$API/git/refs/heads/$BR")
+            echo "I023RES delete_branch branch=$BR code=$CODE"
+            head -c 600 /tmp/db.json
+            echo "I023END"
+            ;;
+          esac
