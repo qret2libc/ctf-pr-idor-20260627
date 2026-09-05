@@ -12,12 +12,18 @@ on:
         - create_comment_api
         - ownerprobe
         - submit_api
+        - submit_target
         - dismiss_api
         - delete_comments_api
+        - delete_review_probe
       pr:
         description: pull request number
         required: false
         default: '1'
+      review_id:
+        description: explicit review id (optional)
+        required: false
+        default: ''
 permissions:
   pull-requests: write
   contents: read
@@ -35,6 +41,7 @@ jobs:
         env:
           PHASE: ${{ github.event.inputs.phase }}
           PR: ${{ github.event.inputs.pr }}
+          RID_IN: ${{ github.event.inputs.review_id }}
         run: |
           set -u
           API="https://api.github.com/repos/$REPO"
@@ -124,17 +131,43 @@ jobs:
             echo "I021RES reviews_list_before_dismiss code=$CODE"
             jq -c 'map({id,state,body,user:.user.login,submitted_at})' /tmp/list.json 2>/dev/null || cat /tmp/list.json
             for RID in $(jq -r '.[] | select(.state=="PENDING") | .id' /tmp/list.json 2>/dev/null); do
-              PAYLOAD=$(jq -n --arg m "i021 api dismiss-marker: $TS" '{message:$m}')
+              PAYLOAD=$(jq -n --arg m "i021 api dismiss-marker: $TS" '{message:$m,event:"DISMISS"}')
               CODE=$(curl -sS -o /tmp/dis_$RID.json -w '%{http_code}' "${H[@]}" -X PUT "$API/pulls/$PR/reviews/$RID/dismissals" --data "$PAYLOAD")
               echo "I021RES dismiss_pending_review id=$RID code=$CODE"
-              jq -c "$jqtrim" /tmp/dis_$RID.json 2>/dev/null || head -c 1000 /tmp/dis_$RID.json
+              jq -c '{id,state,body,message,submitted_at,user:.user.login}' /tmp/dis_$RID.json 2>/dev/null || head -c 1000 /tmp/dis_$RID.json
             done
             for RID in $(jq -r '.[] | select(.state!="PENDING") | .id' /tmp/list.json 2>/dev/null); do
-              PAYLOAD=$(jq -n --arg m "i021 api dismiss-marker: $TS" '{message:$m}')
+              PAYLOAD=$(jq -n --arg m "i021 api dismiss-marker: $TS" '{message:$m,event:"DISMISS"}')
               CODE=$(curl -sS -o /tmp/dis2_$RID.json -w '%{http_code}' "${H[@]}" -X PUT "$API/pulls/$PR/reviews/$RID/dismissals" --data "$PAYLOAD")
               echo "I021RES dismiss_submitted_review id=$RID code=$CODE"
-              jq -c "$jqtrim" /tmp/dis2_$RID.json 2>/dev/null || head -c 1000 /tmp/dis2_$RID.json
+              jq -c '{id,state,body,message,submitted_at,user:.user.login,dismissed_at,dismissed_reason}' /tmp/dis2_$RID.json 2>/dev/null || head -c 1000 /tmp/dis2_$RID.json
             done
+            ;;
+          submit_target)
+            if [ -n "$RID_IN" ]; then
+              PAYLOAD=$(jq -n --arg b "i021 api cross-author submit probe: $TS" '{event:"COMMENT",body:$b}')
+              CODE=$(curl -sS -o /tmp/subt.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls/$PR/reviews/$RID_IN/events" --data "$PAYLOAD")
+              echo "I021RES submit_target id=$RID_IN code=$CODE"
+              jq -c '{id,state,body,message,submitted_at,user:.user.login}' /tmp/subt.json 2>/dev/null || head -c 800 /tmp/subt.json
+            fi
+            ;;
+          delete_review_probe)
+            CODE=$(curl -sS -o /tmp/list.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/reviews?per_page=100")
+            echo "I021RES reviews_list_for_delete_probe code=$CODE"
+            jq -c 'map({id,state,body,user:.user.login,submitted_at})' /tmp/list.json 2>/dev/null || cat /tmp/list.json
+            for RID in $(jq -r '.[].id // empty' /tmp/list.json 2>/dev/null); do
+              CODE=$(curl -sS -o /tmp/delrev_$RID.json -w '%{http_code}' "${H[@]}" -X DELETE "$API/pulls/$PR/reviews/$RID")
+              echo "I021RES delete_review id=$RID code=$CODE"
+              head -c 500 /tmp/delrev_$RID.json
+            done
+            CODE=$(curl -sS -o /tmp/delpr.json -w '%{http_code}' "${H[@]}" -X DELETE "$API/pulls/$PR")
+            echo "I021RES delete_pull_request code=$CODE"
+            head -c 500 /tmp/delpr.json
+            if [ -n "$RID_IN" ]; then
+              CODE=$(curl -sS -o /tmp/delrev2.json -w '%{http_code}' "${H[@]}" -X DELETE "$API/pulls/$PR/reviews/$RID_IN")
+              echo "I021RES delete_review_target id=$RID_IN code=$CODE"
+              head -c 500 /tmp/delrev2.json
+            fi
             ;;
           delete_comments_api)
             CODE=$(curl -sS -o /tmp/comments.json -w '%{http_code}' "${H[@]}" "$API/pulls/$PR/comments?per_page=100")
