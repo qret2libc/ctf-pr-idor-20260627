@@ -1,0 +1,59 @@
+name: i033-pr-probe
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: probe phase
+        required: true
+        type: choice
+        default: create_pr
+        options:
+        - create_pr
+        - cleanup
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GT: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: run
+        shell: bash
+        env:
+          PHASE: ${{ github.event.inputs.phase }}
+        run: |
+          set -u
+          API="https://api.github.com/repos/$REPO"
+          H=(-H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json")
+          TS=$(date +%s%3N)
+          echo "I033TS ts=$TS"
+          case "$PHASE" in
+          create_pr)
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            BR="i033/pr-head-$TS"
+            git checkout -b "$BR"
+            FILE="i033-probe/pr-head-$TS.txt"
+            printf 'i033 pr head file marker %s\n' "$TS" > "$FILE"
+            git add "$FILE"
+            git commit -m "i033 pr head commit marker: $TS"
+            git push -u origin "$BR"
+            TITLE="i033 pub crossref PR $TS"
+            BODY=$(printf 'i033 public PR cross-reference probe body marker: i033-pub-pr-%s\nsee https://github.com/qret2libc/pridor-lifecycle-20260904/issues/5 (qret2libc/pridor-lifecycle-20260904#5)\nand https://github.com/qret2libc/pridor-lifecycle-20260904/pull/1 (qret2libc/pridor-lifecycle-20260904#1)\n' "$TS")
+            PAYLOAD=$(jq -n --arg title "$TITLE" --arg body "$BODY" --arg head "$BR" '{title:$title,body:$body,head:$head,base:"main"}')
+            echo "I033REQ create_pr branch=$BR"
+            CODE=$(curl -sS -o /tmp/pr.json -w '%{http_code}' "${H[@]}" -X POST "$API/pulls" --data "$PAYLOAD")
+            echo "I033RES create_pr code=$CODE"
+            jq -c '{number,id,state,title,body,created_at,user:.user.login,head:{ref:.head.ref,sha:.head.sha},base:{ref:.base.ref},html_url}' /tmp/pr.json 2>/dev/null || head -c 1600 /tmp/pr.json
+            ;;
+          cleanup)
+            echo "I033 cleanup phase reserved"
+            ;;
+          esac
+          echo "I033END"
