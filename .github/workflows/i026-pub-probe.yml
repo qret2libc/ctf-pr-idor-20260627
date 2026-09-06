@@ -89,7 +89,7 @@ jobs:
             ;;
           resolve_one)
             MARKER=$(echo "i026 threadA marker" )
-            q=$(jq -n --arg m "$MARKER" '{query:"query($n:Int!,$m:String!){repository(owner:\"qret2libc\",name:\"ctf-pr-idor-20260627\"){pullRequest(number:$n){reviewThreads(first:100){nodes{id,isResolved,comments(first:100){nodes{id,databaseId,body}}}}}}}",variables:{n:1,m:$m}}')
+            q=$(jq -n '{query:"query($n:Int!){repository(owner:\"qret2libc\",name:\"ctf-pr-idor-20260627\"){pullRequest(number:$n){reviewThreads(first:100){nodes{id,isResolved,comments(first:100){nodes{id,databaseId,body}}}}}}}",variables:{n:1}}')
             curl -sS -o /tmp/th.json -w 'I026RES threads_query code=%{http_code}\n' "${H[@]}" -d "$q" "$GQL"
             echo "I026RES thread query errors:"; jq -c '.errors // "none"' /tmp/th.json 2>/dev/null
             THID=$(jq -r --arg m "$MARKER" '.data.repository.pullRequest.reviewThreads.nodes[] | select(([.comments.nodes[].body] | join(" ")) | contains($m)) | .id' /tmp/th.json 2>/dev/null | head -1)
