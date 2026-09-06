@@ -4,7 +4,6 @@ on:
 permissions:
   contents: read
   discussions: write
-  metadata: read
 jobs:
   probe:
     runs-on: ubuntu-latest
