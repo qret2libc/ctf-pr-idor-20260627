@@ -21,6 +21,10 @@ on:
         description: explicit comment id (optional)
         required: false
         default: ''
+      sha:
+        description: target commit sha (defaults to run commit)
+        required: false
+        default: ''
 permissions:
   checks: write
   contents: read
@@ -44,12 +48,13 @@ jobs:
           PR: '1'
           RID_IN: ${{ github.event.inputs.review_id }}
           CID_IN: ${{ github.event.inputs.comment_id }}
+          SHA_IN: ${{ github.event.inputs.sha }}
         run: |
           set -u
           API="https://api.github.com/repos/$REPO"
           GQL="https://api.github.com/graphql"
           TS=$(date +%s%3N)
-          SHA="${{ github.sha }}"
+          SHA="${SHA_IN:-${{ github.sha }}}"
           H=(-H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json")
           echo "I026RUN repo=$REPO phase=$PHASE sha=$SHA ts=$TS rid_in=$RID_IN cid_in=$CID_IN"
           echo "::group::phase-$PHASE"
