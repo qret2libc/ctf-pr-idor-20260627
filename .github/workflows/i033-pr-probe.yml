@@ -40,6 +40,7 @@ jobs:
             BR="i033/pr-head-$TS"
             git checkout -b "$BR"
             FILE="i033-probe/pr-head-$TS.txt"
+            mkdir -p i033-probe
             printf 'i033 pr head file marker %s\n' "$TS" > "$FILE"
             git add "$FILE"
             git commit -m "i033 pr head commit marker: $TS"
