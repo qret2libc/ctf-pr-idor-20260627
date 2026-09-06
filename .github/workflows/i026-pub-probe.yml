@@ -14,6 +14,7 @@ on:
         - pending_sug
         - finalize
         - issue_hist
+        - cleanup
       review_id:
         description: explicit pending review id (optional)
         required: false
@@ -183,6 +184,25 @@ jobs:
               jq -c '{number:.number,body:.body,updated_at}' /tmp/is2.json 2>/dev/null || head -c 500 /tmp/is2.json
             fi
             echo "I026RES issue_hist done"
+            ;;
+          cleanup)
+            for CID in 3942756499 3942756501; do
+              curl -sS -o /tmp/del.json -w "I026RES delete_pull_comment_$CID code=%{http_code}\n" "${H[@]}" -X DELETE "$API/pulls/comments/$CID"
+              head -c 300 /tmp/del.json; echo
+            done
+            for CID in 5556400949 5556567054; do
+              curl -sS -o /tmp/del.json -w "I026RES delete_issue_comment_$CID code=%{http_code}\n" "${H[@]}" -X DELETE "$API/issues/comments/$CID"
+              head -c 300 /tmp/del.json; echo
+            done
+            curl -sS -o /tmp/del.json -w 'I026RES delete_commit_comment code=%{http_code}\n' "${H[@]}" -X DELETE "$API/comments/199251789"
+            head -c 300 /tmp/del.json; echo
+            curl -sS -o /tmp/cl.json -w 'I026RES close_issue12 code=%{http_code}\n' "${H[@]}" -d '{"state":"closed"}' -X PATCH "$API/issues/12"
+            jq -c '{number:.number,state:.state}' /tmp/cl.json 2>/dev/null || head -c 300 /tmp/cl.json
+            curl -sS -o /tmp/dd.json -w 'I026RES delete_deployment code=%{http_code}\n' "${H[@]}" -X DELETE "$API/deployments/6288363347"
+            head -c 300 /tmp/dd.json; echo
+            curl -sS -o /tmp/dcr.json -w 'I026RES delete_checkrun code=%{http_code}\n' "${H[@]}" -X DELETE "$API/check-runs/101416036994"
+            head -c 300 /tmp/dcr.json; echo
+            echo "I026RES cleanup done"
             ;;
           esac
           echo "::endgroup::"
