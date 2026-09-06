@@ -13,6 +13,7 @@ on:
         - resolve_one
         - pending_sug
         - finalize
+        - issue_hist
       review_id:
         description: explicit pending review id (optional)
         required: false
@@ -158,6 +159,30 @@ jobs:
               echo
             fi
             echo "I026RES finalize done"
+            ;;
+          issue_hist)
+            TITLE="i026 issue edit-history probe $TS"
+            IBODY1="i026 issue body v1 marker: $TS"
+            IBODY2="i026 issue body v2 marker: $TS (edit)"
+            CBODY1="i026 issue comment v1 marker: $TS (mention @qret2libc)"
+            CBODY2="i026 issue comment v2 marker: $TS (edit)"
+            curl -sS -o /tmp/is.json -w 'I026RES issue_create code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg t "$TITLE" --arg b "$IBODY1" '{title:$t,body:$b}')" "$API/issues"
+            jq -c '{number:.number,id:.id,title:.title,body:.body}' /tmp/is.json 2>/dev/null || head -c 800 /tmp/is.json
+            INUM=$(jq -r '.number // empty' /tmp/is.json 2>/dev/null)
+            echo "I026RES issue_number=$INUM"
+            if [ -n "$INUM" ]; then
+              curl -sS -o /tmp/ic.json -w 'I026RES issue_comment_create code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "$CBODY1" '{body:$b}')" "$API/issues/$INUM/comments"
+              jq -c '{id:.id,body:.body}' /tmp/ic.json 2>/dev/null || head -c 500 /tmp/ic.json
+              ICID=$(jq -r '.id // empty' /tmp/ic.json 2>/dev/null)
+              echo "I026RES issue_comment_id=$ICID"
+              if [ -n "$ICID" ]; then
+                curl -sS -o /tmp/ic2.json -w 'I026RES issue_comment_edit code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "$CBODY2" '{body:$b}')" -X PATCH "$API/issues/comments/$ICID"
+                jq -c '{id:.id,body:.body,updated_at}' /tmp/ic2.json 2>/dev/null || head -c 500 /tmp/ic2.json
+              fi
+              curl -sS -o /tmp/is2.json -w 'I026RES issue_body_edit code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "$IBODY2" '{body:$b}')" -X PATCH "$API/issues/$INUM"
+              jq -c '{number:.number,body:.body,updated_at}' /tmp/is2.json 2>/dev/null || head -c 500 /tmp/is2.json
+            fi
+            echo "I026RES issue_hist done"
             ;;
           esac
           echo "::endgroup::"
