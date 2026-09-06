@@ -10,6 +10,10 @@ on:
         options:
         - create_pr
         - cleanup
+      branch:
+        description: branch to delete (cleanup)
+        required: false
+        default: ''
 permissions:
   contents: write
   pull-requests: write
@@ -54,7 +58,11 @@ jobs:
             jq -c '{number,id,state,title,body,created_at,user:.user.login,head:{ref:.head.ref,sha:.head.sha},base:{ref:.base.ref},html_url}' /tmp/pr.json 2>/dev/null || head -c 1600 /tmp/pr.json
             ;;
           cleanup)
-            echo "I033 cleanup phase reserved"
+            BRANCH_IN=${{ github.event.inputs.branch }}
+            echo "I033 cleanup branch=$BRANCH_IN"
+            if [ -n "$BRANCH_IN" ]; then
+              git push origin --delete "$BRANCH_IN" || true
+            fi
             ;;
           esac
           echo "I033END"
