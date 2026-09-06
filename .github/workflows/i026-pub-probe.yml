@@ -1,0 +1,154 @@
+name: i026-pub-probe
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: probe phase
+        required: true
+        type: choice
+        default: objects_v1
+        options:
+        - objects_v1
+        - mkthreads
+        - resolve_one
+        - pending_sug
+        - finalize
+      review_id:
+        description: explicit pending review id (optional)
+        required: false
+        default: ''
+      comment_id:
+        description: explicit comment id (optional)
+        required: false
+        default: ''
+permissions:
+  checks: write
+  contents: read
+  deployments: write
+  issues: write
+  pull-requests: write
+  statuses: write
+  actions: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GT: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: run phase
+        shell: bash
+        env:
+          PHASE: ${{ github.event.inputs.phase }}
+          PR: '1'
+          RID_IN: ${{ github.event.inputs.review_id }}
+          CID_IN: ${{ github.event.inputs.comment_id }}
+        run: |
+          set -u
+          API="https://api.github.com/repos/$REPO"
+          GQL="https://api.github.com/graphql"
+          TS=$(date +%s%3N)
+          SHA="${{ github.sha }}"
+          H=(-H "Authorization: Bearer $GT" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json")
+          echo "I026RUN repo=$REPO phase=$PHASE sha=$SHA ts=$TS rid_in=$RID_IN cid_in=$CID_IN"
+          echo "::group::phase-$PHASE"
+          case "$PHASE" in
+          objects_v1)
+            ICB="i026 issue-comment v1 marker: i026-issue-v1-$TS (mention @qret2libc)"
+            CCB="i026 commit-comment v1 marker: i026-commit-v1-$TS"
+            curl -sS -o /tmp/ic.json -w 'I026RES issue_comment_create code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "$ICB" '{body:$b}')" "$API/issues/$PR/comments"
+            jq -c '{id:.id,body:.body,created_at,html_url}' /tmp/ic.json 2>/dev/null || head -c 500 /tmp/ic.json
+            curl -sS -o /tmp/cc.json -w 'I026RES commit_comment_create code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "$CCB" '{body:$b}')" "$API/commits/$SHA/comments"
+            jq -c '{id:.id,body:.body,created_at}' /tmp/cc.json 2>/dev/null || head -c 500 /tmp/cc.json
+            curl -sS -o /tmp/st.json -w 'I026RES legacy_status_pending code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg d "i026 legacy status pending marker: $TS" --arg u "https://example.com/i026/$TS" '{state:"pending",context:"i026-legacy-status",description:$d,target_url:$u}')" "$API/statuses/$SHA"
+            jq -c '{id:.id,state:.state,context:.context,description:.description,target_url}' /tmp/st.json 2>/dev/null || head -c 500 /tmp/st.json
+            curl -sS -o /tmp/dp.json -w 'I026RES deployment_create code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg d "i026 deployment marker: $TS" '{ref:"main",environment:"i026-env",description:$d,auto_merge:false,required_contexts:[]}')" "$API/deployments"
+            jq -c '{id:.id,environment:.environment,description:.description,created_at}' /tmp/dp.json 2>/dev/null || head -c 500 /tmp/dp.json
+            DID=$(jq -r '.id // empty' /tmp/dp.json 2>/dev/null)
+            if [ -n "$DID" ]; then
+              curl -sS -o /tmp/ds.json -w 'I026RES deploy_status_pending code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg d "i026 deploy status pending marker: $TS" --arg u "https://example.com/i026/dep/$TS" '{state:"pending",description:$d,log_url:$u,environment_url:$u}')" "$API/deployments/$DID/statuses"
+              jq -c '{id:.id,state:.state,description:.description,deployment_id:.deployment.id}' /tmp/ds.json 2>/dev/null || head -c 500 /tmp/ds.json
+            fi
+            curl -sS -o /tmp/cr.json -w 'I026RES check_run_inprogress code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg s "$SHA" --arg t "i026 check probe title $TS" --arg m "i026 check annotation marker: $TS" '{name:"i026-check-probe",head_sha:$s,status:"in_progress",started_at:(now|todateiso8601),output:{title:$t,summary:$t,annotations:[{path:"README.md",start_line:1,end_line:1,annotation_level:"notice",message:$m,title:"i026-annotation"}]}}')" "$API/check-runs"
+            jq -c '{id:.id,name:.name,status:.status,started_at,output:{title:.output.title,annotations_count:(.output.annotations_count // null)}}' /tmp/cr.json 2>/dev/null || head -c 800 /tmp/cr.json
+            echo "I026RES objects_v1 done"
+            ;;
+          mkthreads)
+            RB="i026 threads review marker: $TS"
+            PAYLOAD=$(jq -n --arg b "$RB" '{body:$b,event:"COMMENTED",comments:[{path:"pr_probe.txt",line:1,side:"RIGHT",body:"i026 threadA marker: '"$TS"'"},{path:"pr_probe.txt",line:2,side:"RIGHT",body:"i026 threadB marker: '"$TS"'"}]}')
+            curl -sS -o /tmp/rv.json -w 'I026RES review_threads_create code=%{http_code}\n' "${H[@]}" -d "$PAYLOAD" "$API/pulls/$PR/reviews"
+            jq -c '{id:.id,state:.state,body:.body,submitted_at}' /tmp/rv.json 2>/dev/null || head -c 800 /tmp/rv.json
+            curl -sS -o /tmp/coms.json -w 'I026RES review_comments_list code=%{http_code}\n' "${H[@]}" "$API/pulls/$PR/comments?per_page=100"
+            jq -c '[.[] | select(.pull_request_review_id == (input|.id)) | {id,body,pull_request_review_id}]' /tmp/coms.json /tmp/rv.json 2>/dev/null || head -c 500 /tmp/coms.json
+            echo "I026RES mkthreads done"
+            ;;
+          resolve_one)
+            MARKER=$(echo "i026 threadA marker" )
+            q=$(jq -n --arg m "$MARKER" '{query:"query($n:Int!,$m:String!){repository(owner:\"qret2libc\",name:\"ctf-pr-idor-20260627\"){pullRequest(number:$n){reviewThreads(first:100){nodes{id,isResolved,comments(first:100){nodes{id,databaseId,body}}}}}}}",variables:{n:1,m:$m}}')
+            curl -sS -o /tmp/th.json -w 'I026RES threads_query code=%{http_code}\n' "${H[@]}" -d "$q" "$GQL"
+            THID=$(jq -r --arg m "$MARKER" '.data.repository.pullRequest.reviewThreads.nodes[] | select(any(.comments.nodes[]; .body|contains($m))) | .id' /tmp/th.json 2>/dev/null | head -1)
+            echo "I026RES threadA_id=$THID"
+            if [ -n "$THID" ]; then
+              m=$(jq -n --arg t "$THID" '{query:"mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id,isResolved}}}",variables:{t:$t}}')
+              curl -sS -o /tmp/res.json -w 'I026RES resolve_thread code=%{http_code}\n' "${H[@]}" -d "$m" "$GQL"
+              cat /tmp/res.json | head -c 1000
+              echo
+            fi
+            echo "I026RES resolve_one done"
+            ;;
+          pending_sug)
+            BODY="i026 pending-suggestion review marker: $TS"
+            C1=$(printf 'i026 pending suggestion comment marker: %s\n\n```suggestion\nprobe-suggestion-line-1\n```' "$TS")
+            PAYLOAD=$(jq -n --arg b "$BODY" --arg c "$C1" '{body:$b,comments:[{path:"pr_probe.txt",line:1,side:"RIGHT",body:$c}]}')
+            curl -sS -o /tmp/ps.json -w 'I026RES pending_sug_create code=%{http_code}\n' "${H[@]}" -d "$PAYLOAD" "$API/pulls/$PR/reviews"
+            jq -c '{id:.id,state:.state,body:.body}' /tmp/ps.json 2>/dev/null || head -c 800 /tmp/ps.json
+            echo "I026RES pending_sug done"
+            ;;
+          finalize)
+            # edit issue comment (v1 -> v2)
+            curl -sS -o /tmp/iclist.json -w 'I026RES issue_comments_list code=%{http_code}\n' "${H[@]}" "$API/issues/$PR/comments?per_page=100"
+            ICID=$(jq -r '.[] | select(.body | contains("i026 issue-comment v1 marker")) | .id' /tmp/iclist.json 2>/dev/null | head -1)
+            if [ -n "$ICID" ]; then
+              curl -sS -o /tmp/ic2.json -w 'I026RES issue_comment_edit code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "i026 issue-comment v2 marker: $TS (edit)" '{body:$b}')" -X PATCH "$API/issues/comments/$ICID"
+              jq -c '{id:.id,body:.body,updated_at}' /tmp/ic2.json 2>/dev/null || head -c 500 /tmp/ic2.json
+            fi
+            # edit commit comment (v1 -> v2)
+            curl -sS -o /tmp/cclist.json -w 'I026RES commit_comments_list code=%{http_code}\n' "${H[@]}" "$API/commits/$SHA/comments?per_page=100"
+            CCID=$(jq -r '.[] | select(.body | contains("i026 commit-comment v1 marker")) | .id' /tmp/cclist.json 2>/dev/null | head -1)
+            if [ -n "$CCID" ]; then
+              curl -sS -o /tmp/cc2.json -w 'I026RES commit_comment_edit code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg b "i026 commit-comment v2 marker: $TS (edit)" '{body:$b}')" -X PATCH "$API/comments/$CCID"
+              jq -c '{id:.id,body:.body,updated_at}' /tmp/cc2.json 2>/dev/null || head -c 500 /tmp/cc2.json
+            fi
+            # complete the in-progress check run
+            CRID=$(curl -sS "${H[@]}" "$API/commits/$SHA/check-runs?per_page=100" | jq -r '.check_runs[] | select(.name=="i026-check-probe") | .id' 2>/dev/null | head -1)
+            echo "I026RES check_run_id=$CRID"
+            if [ -n "$CRID" ]; then
+              curl -sS -o /tmp/cr2.json -w 'I026RES check_run_complete code=%{http_code}\n' "${H[@]}" -d "$(jq -n '{status:"completed",conclusion:"success",completed_at:(now|todateiso8601),output:{title:"i026 check completed",summary:"i026 check completed marker"}}')" -X PATCH "$API/check-runs/$CRID"
+              jq -c '{id:.id,status:.status,conclusion:.conclusion}' /tmp/cr2.json 2>/dev/null || head -c 500 /tmp/cr2.json
+            fi
+            # success deployment status
+            DID=$(curl -sS "${H[@]}" "$API/deployments?environment=i026-env&per_page=100" | jq -r '.[0].id // empty' 2>/dev/null)
+            echo "I026RES deployment_id=$DID"
+            if [ -n "$DID" ]; then
+              curl -sS -o /tmp/ds2.json -w 'I026RES deploy_status_success code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg d "i026 deploy status success marker: $TS" '{state:"success",description:$d,environment_url:"https://example.com/i026/ok"}')" "$API/deployments/$DID/statuses"
+              jq -c '{id:.id,state:.state,description:.description}' /tmp/ds2.json 2>/dev/null || head -c 500 /tmp/ds2.json
+            fi
+            # success legacy status (same context)
+            curl -sS -o /tmp/st2.json -w 'I026RES legacy_status_success code=%{http_code}\n' "${H[@]}" -d "$(jq -n --arg d "i026 legacy status success marker: $TS" '{state:"success",context:"i026-legacy-status",description:$d}')" "$API/statuses/$SHA"
+            jq -c '{id:.id,state:.state,context:.context,description:.description}' /tmp/st2.json 2>/dev/null || head -c 500 /tmp/st2.json
+            # discard our own PENDING suggestion review (fall back to input review id)
+            curl -sS -o /tmp/rvl.json -w 'I026RES reviews_list code=%{http_code}\n' "${H[@]}" "$API/pulls/$PR/reviews?per_page=100"
+            PRID=$(jq -r '.[] | select(.state=="PENDING" and (.body | contains("i026 pending-suggestion review marker"))) | .id' /tmp/rvl.json 2>/dev/null | head -1)
+            if [ -z "$PRID" ] && [ -n "$RID_IN" ]; then PRID="$RID_IN"; fi
+            echo "I026RES pending_review_discard_target=$PRID"
+            if [ -n "$PRID" ]; then
+              curl -sS -o /tmp/del.json -w 'I026RES pending_review_discard code=%{http_code}\n' "${H[@]}" -X DELETE "$API/pulls/$PR/reviews/$PRID"
+              head -c 500 /tmp/del.json
+              echo
+            fi
+            echo "I026RES finalize done"
+            ;;
+          esac
+          echo "::endgroup::"
+          echo "I026RUN done phase=$PHASE ts=$TS"
