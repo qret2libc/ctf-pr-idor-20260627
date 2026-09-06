@@ -76,9 +76,13 @@ jobs:
             ;;
           mkthreads)
             RB="i026 threads review marker: $TS"
+            curl -sS -o /tmp/prfiles.json -w 'I026RES pr_files code=%{http_code}\n' "${H[@]}" "$API/pulls/$PR/files?per_page=100"
+            jq -c 'map({filename,status,additions,deletions})' /tmp/prfiles.json 2>/dev/null | head -c 600
+            echo
             PAYLOAD=$(jq -n --arg b "$RB" '{body:$b,event:"COMMENTED",comments:[{path:"pr_probe.txt",line:1,side:"RIGHT",body:"i026 threadA marker: '"$TS"'"},{path:"pr_probe.txt",line:2,side:"RIGHT",body:"i026 threadB marker: '"$TS"'"}]}')
             curl -sS -o /tmp/rv.json -w 'I026RES review_threads_create code=%{http_code}\n' "${H[@]}" -d "$PAYLOAD" "$API/pulls/$PR/reviews"
             jq -c '{id:.id,state:.state,body:.body,submitted_at}' /tmp/rv.json 2>/dev/null || head -c 800 /tmp/rv.json
+            if ! jq -e '.id' /tmp/rv.json >/dev/null 2>&1; then echo "I026RES raw:"; head -c 2000 /tmp/rv.json; echo; fi
             curl -sS -o /tmp/coms.json -w 'I026RES review_comments_list code=%{http_code}\n' "${H[@]}" "$API/pulls/$PR/comments?per_page=100"
             jq -c '[.[] | select(.pull_request_review_id == (input|.id)) | {id,body,pull_request_review_id}]' /tmp/coms.json /tmp/rv.json 2>/dev/null || head -c 500 /tmp/coms.json
             echo "I026RES mkthreads done"
